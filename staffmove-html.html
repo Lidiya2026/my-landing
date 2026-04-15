@@ -226,6 +226,50 @@ function App(){
 
   const reset=()=>{setFileAData(null);setFileBData(null);setFileAName("");setFileBName("");setReportData([]);setActiveFilters(["Все события"]);setSearchQuery("");setShowAll(false);go(1);};
 
+  const downloadReport=()=>{
+    const wb=XLSX.utils.book_new();
+    const periodStr=`${dateFrom.split("-").reverse().join(".")} – ${dateTo.split("-").reverse().join(".")}`;
+    const summaryRows=[
+      ["Отчёт по перемещениям сотрудников"],
+      ["Период:", periodStr],
+      [],
+      ["Показатель","Значение"],
+      ["Всего сотрудников",fileAData?.length??0],
+      ["Перемещений за период",reportData.filter(r=>r.status==="Перемещение").length],
+      ["Новых сотрудников",reportData.filter(r=>r.status==="Новый сотрудник").length],
+      ["Аномалий",anomalies.length],
+    ];
+    const wsSummary=XLSX.utils.aoa_to_sheet(summaryRows);
+    wsSummary["!cols"]=[{wch:35},{wch:25}];
+    XLSX.utils.book_append_sheet(wb,wsSummary,"Сводка");
+
+    const headers=["Номер сотрудника","ФИО","Дата приема","Дата изменения","Отдел (до)","Отдел (после)","Тип изменения","Статус"];
+    const dataRows=filtered.map(r=>[r.id,r.name,fmtDate(r.hire),fmtDate(r.changed),r.deptFrom,r.deptTo,r.type,r.status]);
+    const wsData=XLSX.utils.aoa_to_sheet([headers,...dataRows]);
+    wsData["!cols"]=[{wch:18},{wch:30},{wch:14},{wch:16},{wch:22},{wch:22},{wch:22},{wch:18}];
+    XLSX.utils.book_append_sheet(wb,wsData,"Перемещения");
+
+    const filename=`StaffMove_${dateFrom}_${dateTo}.xlsx`;
+    XLSX.writeFile(wb,filename);
+    setToast("Файл сохранён: "+filename);
+  };
+
+  const copyToClipboard=()=>{
+    const periodStr=`${dateFrom.split("-").reverse().join(".")} – ${dateTo.split("-").reverse().join(".")}`;
+    const text=[
+      "Отчёт по перемещениям сотрудников — StaffMove",
+      `Период: ${periodStr}`,
+      "",
+      `Всего сотрудников: ${fileAData?.length??0}`,
+      `Перемещений за период: ${reportData.filter(r=>r.status==="Перемещение").length}`,
+      `Новых сотрудников: ${reportData.filter(r=>r.status==="Новый сотрудник").length}`,
+      `Аномалий: ${anomalies.length}`,
+    ].join("\n");
+    navigator.clipboard.writeText(text)
+      .then(()=>setToast("Сводка скопирована в буфер обмена"))
+      .catch(()=>setToast("Нет доступа к буферу обмена — разрешите в настройках браузера"));
+  };
+
   return(
     <div style={{fontFamily:"Inter,sans-serif",minHeight:"100vh",background:"#F7F8FA",color:"#1a1a1a"}}>
       <header style={{background:"#fff",borderBottom:"1px solid #E8E8E8",padding:"0 24px",height:56,display:"flex",alignItems:"center",gap:10,position:"sticky",top:0,zIndex:100}}>
@@ -384,8 +428,8 @@ function App(){
           </Card>
 
           <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-            <button onClick={()=>setToast("Файл сохранён: report.xlsx")} style={{padding:"10px 20px",borderRadius:10,border:"none",background:TEAL,color:"#fff",fontSize:14,fontWeight:500,cursor:"pointer"}}>⬇ Скачать отчёт .xlsx</button>
-            <button onClick={()=>setToast("Сводка скопирована в буфер обмена")} style={{padding:"10px 20px",borderRadius:10,border:`1px solid ${TEAL}`,background:"#fff",color:TEAL,fontSize:14,cursor:"pointer"}}>📋 Скопировать сводку</button>
+            <button onClick={downloadReport} style={{padding:"10px 20px",borderRadius:10,border:"none",background:TEAL,color:"#fff",fontSize:14,fontWeight:500,cursor:"pointer"}}>⬇ Скачать отчёт .xlsx</button>
+            <button onClick={copyToClipboard} style={{padding:"10px 20px",borderRadius:10,border:`1px solid ${TEAL}`,background:"#fff",color:TEAL,fontSize:14,cursor:"pointer"}}>📋 Скопировать сводку</button>
             <button onClick={reset} style={{padding:"10px 20px",borderRadius:10,border:"1px solid #D1D5DB",background:"#fff",color:"#374151",fontSize:14,cursor:"pointer"}}>↺ Начать заново</button>
           </div>
         </div>
