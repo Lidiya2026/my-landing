@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>StaffMove</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Inter,sans-serif;background:#F7F8FA;color:#1a1a1a}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+input[type=date]{font-family:Inter,sans-serif}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef}=React;
+const TEAL="#0F6E56",TEAL_MID="#1D9E75";
+
+const COL_EMP=["код","номер сотрудника","id сотрудника","табельный номер","emp_id","employee_id","номер","id"];
+const COL_NAME=["full name","фио","ф.и.о.","имя","name","сотрудник","полное имя"];
+const COL_HIRE=["дата приема на работу","дата приема","дата приёма","дата приёма на работу","hire date","дата найма","принят"];
+const COL_DEPT_CUR=["код отдела","код отдела (текущий)","отдел","department","dept"];
+const COL_DEPT_NAME=["наименование отдела","название отдела","отдел название","department name","наименование"];
+const COL_EMP_B=["номер ресурса","номер сотрудника","id сотрудника","табельный номер","emp_id","employee_id","номер","id","код"];
+const COL_CHANGED=["дата начала","дата изменения","дата измен.","change date"];
+const COL_DEPT_FROM=["код отдела (до)","отдел до","dept before","from dept"];
+const COL_DEPT_TO=["код отдела","код отдела (после)","отдел после","dept after","to dept"];
+const COL_TYPE=["тип изменения","тип","change type"];
+
+function findCol(headers,aliases){
+  for(const a of aliases){const h=headers.find(h=>h.toLowerCase().trim()===a);if(h)return h;}
+  for(const a of aliases){const h=headers.find(h=>h.toLowerCase().trim().includes(a));if(h)return h;}
+  return null;
+}
+function parseDate(v){
+  if(!v)return null;
+  if(typeof v==="number"){const d=new Date(Math.round((v-25569)*86400*1000));return isNaN(d)?null:d;}
+  const s=String(v).trim();
+  const m1=s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);if(m1)return new Date(+m1[3],+m1[2]-1,+m1[1]);
+  const m2=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);if(m2)return new Date(+m2[1],+m2[2]-1,+m2[3]);
+  const d=new Date(s);return isNaN(d)?null:d;
+}
+function fmtDate(d){
+  if(!d)return"—";if(typeof d==="string")return d;
+  return`${String(d.getDate()).padStart(2,"0")}.${String(d.getMonth()+1).padStart(2,"0")}.${d.getFullYear()}`;
+}
+function parseXLSX(file){
+  return new Promise((res,rej)=>{
+    const fr=new FileReader();
+    fr.onload=e=>{
+      try{
+        const wb=XLSX.read(e.target.result,{type:"array",cellDates:false});
+        const ws=wb.Sheets[wb.SheetNames[0]];
+        res(XLSX.utils.sheet_to_json(ws,{defval:""}));
+      }catch(err){rej(err);}
+    };
+    fr.onerror=rej;fr.readAsArrayBuffer(file);
+  });
+}
+function mergeData(empRows,chgRows,dateFrom,dateTo,checkAnomalies){
+  if(!empRows.length)return[];
+  const eH=Object.keys(empRows[0]),cH=chgRows.length?Object.keys(chgRows[0]):[];
+  const E={id:findCol(eH,COL_EMP),name:findCol(eH,COL_NAME),hire:findCol(eH,COL_HIRE),dept:findCol(eH,COL_DEPT_CUR),deptName:findCol(eH,COL_DEPT_NAME)};
+  const C={id:findCol(cH,COL_EMP_B),date:findCol(cH,COL_CHANGED),from:findCol(cH,COL_DEPT_FROM),to:findCol(cH,COL_DEPT_TO),type:findCol(cH,COL_TYPE)};
+  const miss=[];if(!E.id)miss.push("«Номер сотрудника» в файле А");if(!C.id&&chgRows.length)miss.push("«Номер сотрудника» в файле Б");
+  if(miss.length)throw new Error("Не найдены колонки: "+miss.join(", "));
+  const from=parseDate(dateFrom),to=parseDate(dateTo);to&&to.setHours(23,59,59);
+  const chgMap={};
+  for(const r of chgRows){const eid=String(r[C.id]||"").trim();if(!eid)continue;if(!chgMap[eid])chgMap[eid]=[];chgMap[eid].push(r);}
+  const result=[];
+  for(const emp of empRows){
+    const eid=String(emp[E.id]||"").trim();
+    const name=E.name?String(emp[E.name]||"").trim():"";
+    const hireD=E.hire?parseDate(emp[E.hire]):null;
+    const curDept=E.dept?String(emp[E.dept]||"").trim():"";
+    const curDeptName=E.deptName?String(emp[E.deptName]||"").trim():curDept;
+    const changes=chgMap[eid]||[];
+    if(!changes.length){result.push({id:eid,name,hire:hireD,changed:null,deptFrom:curDeptName,deptTo:"—",type:"—",status:"Без изменений",anomaly:false});continue;}
+    for(const ch of changes){
+      const chDate=C.date?parseDate(ch[C.date]):null;
+      const dFrom=curDeptName||"—";
+      const dTo=C.to?String(ch[C.to]||"—").trim():"—";
+      const typ=C.type?String(ch[C.type]||"—").trim():"—";
+      let anomaly=false;
+      if(checkAnomalies&&hireD&&chDate&&chDate<hireD)anomaly=true;
+      const inPeriod=chDate&&from&&to?(chDate>=from&&chDate<=to):true;
+      let status;
+      if(anomaly)status="Аномалия";
+      else if(!inPeriod)continue;
+      else if(hireD&&chDate&&Math.abs(chDate-hireD)<86400000&&dFrom==="—")status="Новый сотрудник";
+      else status="Перемещение";
+      result.push({id:eid,name,hire:hireD,changed:chDate,deptFrom:dFrom,deptTo:dTo,type:typ,status,anomaly});
+    }
+  }
+  return result;
+}
+
+const statusStyle={"Перемещение":{bg:"#E6F1FB",color:"#0C447C"},"Новый сотрудник":{bg:"#EAF3DE",color:"#27500A"},"Без изменений":{bg:"#F1EFE8",color:"#444441"},"Аномалия":{bg:"#FCEBEB",color:"#791F1F"}};
+const FILTERS=["Все события","Перемещение","Новый сотрудник","Без изменений","Аномалия"];
+
+function buildConsole(dateFrom,dateTo,empCount,chgCount,matched,unmatched,events,anomCount){
+  return[
+    `> Загрузка employees.xlsx..............  ✓ ${empCount} сотрудников`,
+    `> Загрузка changes.xlsx.................  ✓ ${chgCount} записи`,
+    `> Сопоставление по номеру сотрудника...  ✓ ${matched} совпадений / ${unmatched} без пары`,
+    `> Фильтрация по периоду ${dateFrom}–${dateTo}...  ✓ ${events} событий`,
+    `> Классификация событий.................  ✓ готово`,
+    anomCount>0?`> Проверка аномалий.....................  ⚠ ${anomCount} аномалии обнаружены`:`> Проверка аномалий.....................  ✓ аномалий не обнаружено`,
+    `> Формирование отчёта...................  ✓ готово`,
+  ];
+}
+
+function Card({children,style}){return<div style={{background:"#fff",borderRadius:16,boxShadow:"0 2px 16px rgba(0,0,0,0.07)",padding:"20px 24px",...style}}>{children}</div>;}
+function Toast({msg,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t);},[]);
+  return<div style={{position:"fixed",bottom:28,right:28,background:TEAL,color:"#fff",borderRadius:12,padding:"12px 20px",fontSize:14,boxShadow:"0 4px 20px rgba(0,0,0,0.18)",zIndex:9999}}>{msg}</div>;
+}
+function FileZone({label,name,err,hint,onChange}){
+  const ref=useRef();const loaded=!!name&&!err;
+  return(
+    <div style={{flex:1,minWidth:260,border:`2px dashed ${err?"#F87171":loaded?"#0F6E56":"#D1D5DB"}`,borderRadius:16,padding:20,background:err?"#FFF5F5":loaded?"#F0FBF6":"#fff",transition:"all .2s"}}>
+      <div style={{fontWeight:500,fontSize:14,color:"#374151",marginBottom:8}}>{label}</div>
+      <input ref={ref} type="file" accept=".xlsx,.xls" style={{display:"none"}} onChange={e=>onChange(e.target.files[0])}/>
+      {!loaded&&!err&&<div onClick={()=>ref.current.click()} style={{textAlign:"center",padding:"20px 0",color:"#9CA3AF",cursor:"pointer"}}><div style={{fontSize:32,marginBottom:8}}>📂</div><div style={{fontSize:13}}>Нажмите для выбора .xlsx файла</div><div style={{fontSize:11,color:"#C4C4C4",marginTop:6}}>{hint}</div></div>}
+      {err&&<div><div style={{color:"#DC2626",fontSize:13,marginBottom:10}}>{err}</div><button onClick={()=>ref.current.click()} style={{fontSize:12,padding:"6px 14px",borderRadius:8,border:"1px solid #DC2626",background:"#fff",color:"#DC2626",cursor:"pointer"}}>Выбрать другой файл</button></div>}
+      {loaded&&<div><div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><span style={{fontSize:20}}>✅</span><span style={{fontSize:13,color:"#374151",fontWeight:500}}>{name}</span></div><button onClick={()=>ref.current.click()} style={{fontSize:12,padding:"5px 12px",borderRadius:8,border:`1px solid ${TEAL}`,background:"#fff",color:TEAL,cursor:"pointer"}}>Заменить файл</button></div>}
+    </div>
+  );
+}
+
+function App(){
+  const [screen,setScreen]=useState(1);
+  const [fileAData,setFileAData]=useState(null);
+  const [fileBData,setFileBData]=useState(null);
+  const [fileAName,setFileAName]=useState("");
+  const [fileBName,setFileBName]=useState("");
+  const [fileAErr,setFileAErr]=useState("");
+  const [fileBErr,setFileBErr]=useState("");
+  const [dateFrom,setDateFrom]=useState("2025-01-01");
+  const [dateTo,setDateTo]=useState("2025-03-31");
+  const [checkAnomalies,setCheckAnomalies]=useState(true);
+  const [activeFilters,setActiveFilters]=useState(["Все события"]);
+  const [searchQuery,setSearchQuery]=useState("");
+  const [showAll,setShowAll]=useState(false);
+  const [consoleIdx,setConsoleIdx]=useState(0);
+  const [consoleText,setConsoleText]=useState([]);
+  const [toast,setToast]=useState(null);
+  const [fadeIn,setFadeIn]=useState(true);
+  const [reportData,setReportData]=useState([]);
+  const [mergeError,setMergeError]=useState("");
+  const [presetYear,setPresetYear]=useState(2025);
+  const years=[2023,2024,2025,2026];
+  const presets=[
+    {label:"I кв.",    from:`${presetYear}-01-01`,to:`${presetYear}-03-31`},
+    {label:"II кв.",   from:`${presetYear}-04-01`,to:`${presetYear}-06-30`},
+    {label:"III кв.",  from:`${presetYear}-07-01`,to:`${presetYear}-09-30`},
+    {label:"IV кв.",   from:`${presetYear}-10-01`,to:`${presetYear}-12-31`},
+    {label:"1-е полугодие",from:`${presetYear}-01-01`,to:`${presetYear}-06-30`},
+    {label:"2-е полугодие",from:`${presetYear}-07-01`,to:`${presetYear}-12-31`},
+    {label:"Весь год", from:`${presetYear}-01-01`,to:`${presetYear}-12-31`},
+  ];
+
+  const go=s=>{setFadeIn(false);setTimeout(()=>{setScreen(s);setFadeIn(true);},350);};
+
+  useEffect(()=>{
+    if(screen!==2)return;
+    let data=[],err="";
+    try{data=mergeData(fileAData,fileBData,dateFrom,dateTo,checkAnomalies);}catch(e){err=e.message;}
+    if(err){setMergeError(err);setConsoleText([]);setConsoleIdx(0);return;}
+    const empIds=new Set(fileAData.map(r=>String(Object.values(r)[0]).trim()));
+    const chgIds=new Set(fileBData.map(r=>String(Object.values(r)[0]).trim()));
+    const matched=[...empIds].filter(x=>chgIds.has(x)).length;
+    const lines=buildConsole(
+      dateFrom.split("-").reverse().join("."),dateTo.split("-").reverse().join("."),
+      fileAData.length,fileBData.length,matched,empIds.size-matched,
+      data.filter(r=>r.status!=="Без изменений").length,data.filter(r=>r.anomaly).length
+    );
+    setConsoleText(lines);setReportData(data);setMergeError("");setConsoleIdx(0);
+    let i=0;
+    const iv=setInterval(()=>{
+      i++;setConsoleIdx(i);
+      if(i>=lines.length-1){clearInterval(iv);setTimeout(()=>go(3),600);}
+    },380);
+    return()=>clearInterval(iv);
+  },[screen]);
+
+  const handleFile=async(file,which)=>{
+    if(!file)return;
+    const setData=which==="A"?setFileAData:setFileBData;
+    const setName=which==="A"?setFileAName:setFileBName;
+    const setErr =which==="A"?setFileAErr :setFileBErr;
+    setErr("");
+    try{
+      const rows=await parseXLSX(file);
+      if(!rows.length)throw new Error("Файл пустой");
+      setData(rows);setName(file.name);
+    }catch(e){setErr("Ошибка: "+e.message);setData(null);setName("");}
+  };
+
+  const toggleFilter=f=>{
+    if(f==="Все события"){setActiveFilters(["Все события"]);return;}
+    setActiveFilters(prev=>{const w=prev.filter(x=>x!=="Все события"),next=w.includes(f)?w.filter(x=>x!==f):[...w,f];return next.length?next:["Все события"];});
+  };
+
+  const filtered=reportData.filter(r=>{
+    const mf=activeFilters.includes("Все события")||activeFilters.includes(r.status);
+    const q=searchQuery.toLowerCase();
+    return mf&&(!q||r.name.toLowerCase().includes(q)||r.id.toLowerCase().includes(q));
+  });
+  const displayed=showAll?filtered:filtered.slice(0,15);
+  const canRun=!!fileAData&&!!fileBData&&!!dateFrom&&!!dateTo;
+  const anomalies=reportData.filter(r=>r.anomaly);
+  const metrics=[
+    {label:"Всего сотрудников",    value:fileAData?.length??0,         accent:"#1a1a1a"},
+    {label:"Перемещений за период",value:reportData.filter(r=>r.status==="Перемещение").length, accent:TEAL},
+    {label:"Новых сотрудников",    value:reportData.filter(r=>r.status==="Новый сотрудник").length,accent:"#27500A"},
+    {label:"Аномалий",             value:anomalies.length,             accent:"#BA7517",bg:"#FAEEDA"},
+  ];
+
+  const reset=()=>{setFileAData(null);setFileBData(null);setFileAName("");setFileBName("");setReportData([]);setActiveFilters(["Все события"]);setSearchQuery("");setShowAll(false);go(1);};
+
+  return(
+    <div style={{fontFamily:"Inter,sans-serif",minHeight:"100vh",background:"#F7F8FA",color:"#1a1a1a"}}>
+      <header style={{background:"#fff",borderBottom:"1px solid #E8E8E8",padding:"0 24px",height:56,display:"flex",alignItems:"center",gap:10,position:"sticky",top:0,zIndex:100}}>
+        <span style={{fontSize:20}}>📊</span>
+        <span style={{color:TEAL,fontWeight:700,fontSize:18}}>StaffMove</span>
+        <span style={{color:"#d1d5db"}}>|</span>
+        <span style={{color:"#6b7280",fontSize:13}}>Отчёт по перемещениям сотрудников</span>
+      </header>
+
+      <main style={{maxWidth:900,margin:"0 auto",padding:"28px 16px",opacity:fadeIn?1:0,transform:fadeIn?"translateY(0)":"translateY(20px)",transition:"opacity .35s,transform .35s"}}>
+
+      {screen===1&&(
+        <div>
+          <h1 style={{fontSize:22,fontWeight:500,marginBottom:6}}>Настройка отчёта</h1>
+          <p style={{color:"#6b7280",fontSize:14,marginBottom:24}}>Загрузите два файла .xlsx и задайте период</p>
+          <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:24}}>
+            <FileZone label="Файл А: Справочник сотрудников" name={fileAName} err={fileAErr} hint="Код, Full Name, дата приема на работу, Код отдела" onChange={f=>handleFile(f,"A")}/>
+            <FileZone label="Файл Б: История изменений" name={fileBName} err={fileBErr} hint="Номер ресурса, Дата начала, Код отдела" onChange={f=>handleFile(f,"B")}/>
+          </div>
+          {canRun&&(
+            <Card style={{animation:"fadeIn .35s"}}>
+              <div style={{fontWeight:500,fontSize:15,marginBottom:16}}>📅 Период отчёта</div>
+              <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:14}}>
+                {["С","По"].map((lbl,i)=>(
+                  <label key={lbl} style={{display:"flex",flexDirection:"column",gap:4,fontSize:13,color:"#6b7280"}}>
+                    {lbl}
+                    <input type="date" value={i===0?dateFrom:dateTo} onChange={e=>i===0?setDateFrom(e.target.value):setDateTo(e.target.value)} style={{fontSize:14,padding:"8px 12px",borderRadius:8,border:"1px solid #D1D5DB",outline:"none",fontFamily:"Inter,sans-serif"}}/>
+                  </label>
+                ))}
+              </div>
+              <div style={{marginBottom:12}}>
+                <div style={{fontSize:13,color:"#6b7280",marginBottom:6}}>Год</div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                  {years.map(y=>(
+                    <button key={y} onClick={()=>setPresetYear(y)} style={{fontSize:13,padding:"5px 14px",borderRadius:20,border:`1px solid ${presetYear===y?TEAL:"#D1D5DB"}`,background:presetYear===y?"#E1F5EE":"#fff",color:presetYear===y?TEAL:"#374151",cursor:"pointer",fontWeight:presetYear===y?500:400}}>{y}</button>
+                  ))}
+                </div>
+              </div>
+              <div style={{marginBottom:16}}>
+                <div style={{fontSize:13,color:"#6b7280",marginBottom:6}}>Быстрый выбор периода</div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                  {presets.map(p=>(
+                    <button key={p.label} onClick={()=>{setDateFrom(p.from);setDateTo(p.to);}} style={{fontSize:12,padding:"5px 12px",borderRadius:20,border:`1px solid ${TEAL}`,background:dateFrom===p.from&&dateTo===p.to?TEAL:"#fff",color:dateFrom===p.from&&dateTo===p.to?"#fff":TEAL,cursor:"pointer"}}>{p.label}</button>
+                  ))}
+                </div>
+              </div>
+              <label style={{display:"flex",alignItems:"center",gap:8,fontSize:14,cursor:"pointer",marginBottom:20}}>
+                <input type="checkbox" checked={checkAnomalies} onChange={e=>setCheckAnomalies(e.target.checked)} style={{width:16,height:16,accentColor:TEAL}}/>
+                Выявлять аномалии (дата изменения раньше даты приёма)
+              </label>
+              <button onClick={()=>go(2)} style={{width:"100%",padding:"13px 0",borderRadius:12,border:"none",background:TEAL,color:"#fff",fontSize:15,fontWeight:500,cursor:"pointer"}}>Сформировать отчёт →</button>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {screen===2&&(
+        <div style={{display:"flex",justifyContent:"center",alignItems:"center",minHeight:"60vh"}}>
+          <div style={{background:"#1a1a1a",borderRadius:16,padding:"28px 32px",width:"100%",maxWidth:620}}>
+            <div style={{color:TEAL_MID,fontSize:12,fontFamily:"monospace",marginBottom:12}}>// Обработка данных...</div>
+            {mergeError?(
+              <div style={{color:"#F87171",fontFamily:"monospace",fontSize:13}}>
+                ✗ Ошибка: {mergeError}<br/><br/>
+                <button onClick={()=>go(1)} style={{background:"transparent",border:"1px solid #F87171",color:"#F87171",borderRadius:8,padding:"6px 14px",cursor:"pointer",fontFamily:"monospace",fontSize:13}}>← Вернуться</button>
+              </div>
+            ):(
+              <>
+                {consoleText.map((line,i)=>i<=consoleIdx&&(
+                  <div key={i} style={{color:line.includes("⚠")?"#F59E0B":TEAL_MID,fontSize:13,fontFamily:"monospace",lineHeight:1.9,animation:"fadeIn .3s"}}>{line}</div>
+                ))}
+                {consoleIdx<consoleText.length-1&&<span style={{color:TEAL_MID,fontFamily:"monospace",animation:"blink 1s infinite"}}>█</span>}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {screen===3&&(
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:10}}>
+            <div>
+              <h1 style={{fontSize:22,fontWeight:500}}>Отчёт по перемещениям</h1>
+              <div style={{color:"#6b7280",fontSize:13}}>{dateFrom.split("-").reverse().join(".")} – {dateTo.split("-").reverse().join(".")}</div>
+            </div>
+            <button onClick={reset} style={{fontSize:13,padding:"7px 16px",borderRadius:8,border:"1px solid #D1D5DB",background:"#fff",color:"#374151",cursor:"pointer"}}>← Начать заново</button>
+          </div>
+
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12,marginBottom:20}}>
+            {metrics.map((m,i)=>(
+              <Card key={m.label} style={{animation:`fadeIn .3s ${i*0.1}s both`,background:m.bg||"#fff"}}>
+                <div style={{fontSize:13,color:"#6b7280",marginBottom:6}}>{m.label}</div>
+                <div style={{fontSize:28,fontWeight:500,color:m.accent}}>{m.value}</div>
+              </Card>
+            ))}
+          </div>
+
+          {anomalies.length>0&&(
+            <div style={{background:"#FAEEDA",border:"1px solid #F0C67A",borderRadius:12,padding:"14px 18px",marginBottom:20}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                <span>⚠️</span>
+                <span style={{fontWeight:500,fontSize:14,color:"#78450A"}}>Обнаружены аномалии: {anomalies.length} {anomalies.length===1?"запись":"записи"}</span>
+              </div>
+              <div style={{fontSize:13,color:"#78450A",marginBottom:10}}>У следующих сотрудников дата изменения раньше даты приёма на работу.</div>
+              {anomalies.slice(0,3).map((a,i)=>(
+                <div key={i} style={{fontSize:13,color:"#5C3008",lineHeight:1.8}}>• {a.id} {a.name} (изм. {fmtDate(a.changed)} &lt; приём {fmtDate(a.hire)})</div>
+              ))}
+              {anomalies.length>3&&<div style={{fontSize:13,color:"#9A6520",marginTop:4}}>+ ещё {anomalies.length-3} скрытых</div>}
+            </div>
+          )}
+
+          <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:14}}>
+            {FILTERS.map(f=>{
+              const active=activeFilters.includes(f),isAnom=f==="Аномалия";
+              return<button key={f} onClick={()=>toggleFilter(f)} style={{fontSize:13,padding:"6px 14px",borderRadius:20,cursor:"pointer",border:active?"none":`1px solid ${isAnom?"#791F1F":"#D1D5DB"}`,background:active?(isAnom?"#791F1F":TEAL):"#fff",color:active?"#fff":(isAnom?"#791F1F":"#374151")}}>{f}</button>;
+            })}
+            <input value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} placeholder="Поиск по ФИО или номеру..." style={{flex:1,minWidth:200,fontSize:13,padding:"6px 14px",borderRadius:20,border:"1px solid #D1D5DB",outline:"none"}}/>
+          </div>
+
+          <Card style={{padding:0,overflow:"hidden",marginBottom:16}}>
+            <div style={{overflowX:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                <thead>
+                  <tr style={{background:"#F9FAFB",borderBottom:"1px solid #E5E7EB"}}>
+                    {["Номер сотрудника","ФИО","Дата приема","Дата изменения","Отдел (до)","Отдел (после)","Тип изменения","Статус"].map(h=>(
+                      <th key={h} style={{padding:"10px 14px",textAlign:"left",fontWeight:500,color:"#374151",whiteSpace:"nowrap"}}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {displayed.map((r,i)=>{
+                    const st=statusStyle[r.status]||{};
+                    return(
+                      <tr key={i} style={{background:r.anomaly?"#fff5f5":"#fff",borderBottom:"1px solid #F3F4F6",animation:`fadeIn .2s ${i*0.02}s both`}}>
+                        <td style={{padding:"10px 14px",color:TEAL,fontWeight:500,whiteSpace:"nowrap"}}>{r.id}</td>
+                        <td style={{padding:"10px 14px",whiteSpace:"nowrap"}}>{r.name}</td>
+                        <td style={{padding:"10px 14px",color:"#6b7280",whiteSpace:"nowrap"}}>{fmtDate(r.hire)}</td>
+                        <td style={{padding:"10px 14px",color:"#6b7280",whiteSpace:"nowrap"}}>{fmtDate(r.changed)}</td>
+                        <td style={{padding:"10px 14px",whiteSpace:"nowrap"}}>{r.deptFrom}</td>
+                        <td style={{padding:"10px 14px",whiteSpace:"nowrap"}}>{r.deptTo}</td>
+                        <td style={{padding:"10px 14px",color:"#6b7280",whiteSpace:"nowrap"}}>{r.type}</td>
+                        <td style={{padding:"10px 14px",whiteSpace:"nowrap"}}>
+                          <span title={r.anomaly?"Дата изменения раньше даты приёма на работу":undefined} style={{fontSize:12,padding:"3px 10px",borderRadius:20,background:st.bg,color:st.color,cursor:r.anomaly?"help":"default"}}>{r.status}</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {filtered.length===0&&<tr><td colSpan={8} style={{padding:"32px",textAlign:"center",color:"#9CA3AF"}}>Нет данных по выбранным фильтрам</td></tr>}
+                </tbody>
+              </table>
+            </div>
+            {!showAll&&filtered.length>15&&(
+              <div style={{padding:"12px 20px",borderTop:"1px solid #F3F4F6",textAlign:"center"}}>
+                <button onClick={()=>setShowAll(true)} style={{fontSize:13,padding:"7px 20px",borderRadius:8,border:`1px solid ${TEAL}`,background:"#fff",color:TEAL,cursor:"pointer"}}>Показать все {filtered.length} записей</button>
+              </div>
+            )}
+          </Card>
+
+          <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+            <button onClick={()=>setToast("Файл сохранён: report.xlsx")} style={{padding:"10px 20px",borderRadius:10,border:"none",background:TEAL,color:"#fff",fontSize:14,fontWeight:500,cursor:"pointer"}}>⬇ Скачать отчёт .xlsx</button>
+            <button onClick={()=>setToast("Сводка скопирована в буфер обмена")} style={{padding:"10px 20px",borderRadius:10,border:`1px solid ${TEAL}`,background:"#fff",color:TEAL,fontSize:14,cursor:"pointer"}}>📋 Скопировать сводку</button>
+            <button onClick={reset} style={{padding:"10px 20px",borderRadius:10,border:"1px solid #D1D5DB",background:"#fff",color:"#374151",fontSize:14,cursor:"pointer"}}>↺ Начать заново</button>
+          </div>
+        </div>
+      )}
+
+      </main>
+      {toast&&<Toast msg={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
