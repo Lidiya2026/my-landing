@@ -22,6 +22,7 @@ input[type=date]{font-family:Inter,sans-serif}
 <script type="text/babel">
 const {useState,useEffect,useRef}=React;
 const TEAL="#0F6E56",TEAL_MID="#1D9E75";
+const MAX_FILE_MB=10,MAX_ROWS=50000;
 
 const COL_EMP=["код","номер сотрудника","id сотрудника","табельный номер","emp_id","employee_id","номер","id"];
 const COL_NAME=["full name","фио","ф.и.о.","имя","name","сотрудник","полное имя"];
@@ -197,9 +198,14 @@ function App(){
     const setName=which==="A"?setFileAName:setFileBName;
     const setErr =which==="A"?setFileAErr :setFileBErr;
     setErr("");
+    if(file.size>MAX_FILE_MB*1024*1024){
+      setErr(`Файл слишком большой (${(file.size/1024/1024).toFixed(1)} МБ). Максимум — ${MAX_FILE_MB} МБ`);
+      return;
+    }
     try{
       const rows=await parseXLSX(file);
       if(!rows.length)throw new Error("Файл пустой");
+      if(rows.length>MAX_ROWS)throw new Error(`Слишком много строк (${rows.length.toLocaleString("ru-RU")}). Максимум — ${MAX_ROWS.toLocaleString("ru-RU")}`);
       setData(rows);setName(file.name);
     }catch(e){setErr("Ошибка: "+e.message);setData(null);setName("");}
   };
